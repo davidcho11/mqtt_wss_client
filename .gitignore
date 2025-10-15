@@ -1,41 +1,124 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
+# =========================================
+# C++ / General
+# =========================================
 *.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
+*.o
+*.lo
 *.la
+*.al
 *.a
 *.lib
-
-# Executables
+*.so
+*.so.*
+*.dylib
+*.dll
 *.exe
 *.out
 *.app
+*.i
+*.ii
+*.s
+*.su
+*.idb
+*.pdb
+*.mod
+*.exp
+*.manifest
 
-# debug information files
-*.dwo
+# =========================================
+# Compiler-generated files
+# =========================================
+*.gcno
+*.gcda
+*.gcov
+*.gch
+*.pch
+
+# =========================================
+# Build and binary directories
+# =========================================
+/build/
+/build-*/
+/bin/
+/lib/
+/dist/
+/out/
+/Debug/
+/Release/
+/x64/
+/x86/
+/CMakeFiles/
+
+# =========================================
+# CMake
+# =========================================
+CMakeCache.txt
+CMakeScripts/
+Testing/
+CTestTestfile.cmake
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CMakeUserPresets.json
+
+# =========================================
+# IDE / Editor
+# =========================================
+# Visual Studio
+*.user
+*.userosscache
+*.suo
+*.ncb
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.VC.opendb
+*.ipch
+/.vs/
+
+# CLion / JetBrains
+.idea/
+cmake-build-*/
+
+# Xcode
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+*.xcworkspace/
+*.xcuserstate
+*.xcuserdata/
+
+# Visual Studio Code
+.vscode/
+.history/
+*.code-workspace
+
+# =========================================
+# OS / Misc
+# =========================================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+*.tmp
+*.log
+
+# =========================================
+# Test / Generated files
+# =========================================
+*.test
+*.log
+*.cache
+*.json.tmp
+
+# =========================================
+# Other project specific
+# =========================================
+*.pid
+*.lock
+*.cfg
+*.env
+*.ini
+*.bak
+*.old
+

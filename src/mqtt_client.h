@@ -8,6 +8,8 @@
 #include <thread>
 #include <optional>
 #include <filesystem>
+#include <chrono>
+#include <queue>
 
 #ifdef _WIN32
     #include <windows.h>
@@ -29,12 +31,35 @@ struct MQTTConfig {
     std::optional<std::string> username;
     std::optional<std::string> password;
     std::string websocket_path = "/mqtt";
-    int keep_alive_seconds = 60;
+    int keep_alive_seconds = 20;
     int qos = 1;
     int min_retry_interval = 1;
     int max_retry_interval = 60;
     std::optional<std::string> cert_file_path;  // 인증서 파일 경로 (선택사항)
-    bool use_websockets = true;
+
+    // 프로토콜 설정 (수정됨)
+    bool use_websockets = true;    // true: WebSocket, false: TCP
+    bool use_ssl = true;           // true: 보안(WSS/MQTTS), false: 비보안(WS/MQTT)
+    
+    int connection_check_interval_ms = 1000; // 연결 체크 간격
+    
+    // 프로토콜 문자열 반환 헬퍼
+    std::string get_protocol_string() const {
+        if (use_websockets) {
+            return use_ssl ? "wss" : "ws";
+        } else {
+            return use_ssl ? "ssl" : "tcp";  // 또는 "mqtts" : "mqtt"
+        }
+    }
+    
+    // 기본 포트 제안 헬퍼
+    int get_default_port() const {
+        if (use_websockets) {
+            return use_ssl ? 8883 : 8080;  // WSS : WS
+        } else {
+            return use_ssl ? 8883 : 1883;  // MQTTS : MQTT
+        }
+    }
 };
 
 class MQTTClient {
@@ -60,6 +85,10 @@ public:
                         int qos = 1, bool retained = false);
     void request_unsubscribe(const std::string& topic);
 
+    void check_connection_health();
+    
+    MQTTAsync get_client() const { return client_; }
+
 private:
     // 콜백 함수들 (static)
     static void on_connection_lost(void* context, char* cause);
@@ -72,21 +101,23 @@ private:
     static void on_send_success(void* context, MQTTAsync_successData* response);
     static void on_send_failure(void* context, MQTTAsync_failureData* response);
 
-    // 플랫폼별 인증서 추출
+    // 인증서 관련 (SSL 사용 시에만 플랫폼별 인증서 추출)
     std::string extract_windows_certificates();
     std::string extract_macos_certificates();
     std::string extract_system_certificates();  // 플랫폼 자동 선택
     std::string setup_ssl_cert();
-        
     // Base64 인코딩 헬퍼
     std::string base64_encode(const unsigned char* data, size_t length);
  
     // MQTT 연결
     bool connect_to_broker();
     void disconnect_from_broker();
-    
     // 작업 처리
     void process_requests();
+
+    // 활동 추적
+    void update_last_activity();
+    bool detect_sleep_resume();    
 
     MQTTConfig config_;
     EventQueue& event_queue_;
@@ -97,6 +128,10 @@ private:
     
     std::string temp_cert_file_;
     
+    std::chrono::steady_clock::time_point last_activity_;
+    std::chrono::steady_clock::time_point last_check_time_;
+    mutable std::mutex activity_mutex_;
+
     // 작업 큐
     struct WorkItem {
         enum class Type { SUBSCRIBE, PUBLISH, UNSUBSCRIBE };

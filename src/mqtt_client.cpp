@@ -13,12 +13,19 @@ MQTTClient::MQTTClient(const MQTTConfig& config, EventQueue& event_queue)
         config_.client_id = "mqtt_client_" + 
             std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
     }
+
+    // 활동 시간 초기화
+    last_activity_ = std::chrono::steady_clock::now();
+    last_check_time_ = std::chrono::steady_clock::now();
 }
 
 MQTTClient::~MQTTClient() {
     stop();
 }
 
+// ============================================================================
+// 인증서 관련 함수
+// ============================================================================
 // Windows 인증서 추출
 std::string MQTTClient::extract_windows_certificates() {
 #ifdef _WIN32
@@ -227,20 +234,115 @@ std::string MQTTClient::base64_encode(const unsigned char* data, size_t length) 
     
     return ret;
 }
+// ============================================================================
+// 활동 추적
+// ============================================================================
+void MQTTClient::update_last_activity() {
+    std::lock_guard<std::mutex> lock(activity_mutex_);
+    last_activity_ = std::chrono::steady_clock::now();
+}
 
+bool MQTTClient::detect_sleep_resume() {
+    std::lock_guard<std::mutex> lock(activity_mutex_);
+    
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        now - last_check_time_).count();
+    
+    // 체크 간격보다 훨씬 오래 걸렸으면 sleep으로 판단
+    // 예: 1초 간격인데 5초 이상 걸렸으면 비정상
+    int expected_interval_sec = config_.connection_check_interval_ms / 1000 + 1;
+    if (elapsed > expected_interval_sec * 3) {
+        std::cout << "[Health] Detected unusual delay: " << elapsed 
+                  << " seconds (expected ~" << expected_interval_sec 
+                  << "s) - possible sleep/resume" << std::endl;
+        last_check_time_ = now;
+        return true;
+    }
+    
+    last_check_time_ = now;
+    return false;
+}
+
+void MQTTClient::check_connection_health() {
+    // Sleep 복구 감지
+    bool sleep_detected = detect_sleep_resume();
+    
+    if (!connected_.load()) {
+        return;  // 이미 연결 끊김 상태
+    }
+    
+    // Paho의 연결 상태 확인
+    int is_connected = MQTTAsync_isConnected(client_);
+    
+    if (!is_connected) {
+        std::cout << "[Health] Connection lost detected by isConnected()" << std::endl;
+        connected_.store(false);
+        event_queue_.push(MQTTEvent(EventType::CONNECTION_LOST, 
+                                    "Stale connection detected"));
+        // 자동 재연결이 작동할 것임
+        return;
+    }
+    
+    // Sleep 복구 후 명시적 확인
+    if (sleep_detected) {
+        std::cout << "[Health] Sleep detected - verifying connection..." << std::endl;
+        
+        // 활동이 오래 없었는지 확인
+        std::lock_guard<std::mutex> lock(activity_mutex_);
+        auto now = std::chrono::steady_clock::now();
+        auto no_activity_sec = std::chrono::duration_cast<std::chrono::seconds>(
+            now - last_activity_).count();
+        
+        // Keep-alive 간격의 2배 이상 활동 없으면 의심
+        if (no_activity_sec > config_.keep_alive_seconds * 2) {
+            std::cout << "[Health] No activity for " << no_activity_sec 
+                      << " seconds - forcing reconnect" << std::endl;
+            
+            connected_.store(false);
+            
+            // 명시적 재연결 (자동 재연결 대신)
+            std::thread([this]() {
+                std::cout << "[Health] Disconnecting stale connection..." << std::endl;
+                
+                MQTTAsync_disconnectOptions disc_opts = MQTTAsync_disconnectOptions_initializer;
+                disc_opts.timeout = 1000;
+                MQTTAsync_disconnect(client_, &disc_opts);
+                
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                
+                std::cout << "[Health] Attempting reconnect..." << std::endl;
+                // 자동 재연결이 작동하도록 놔둠
+            }).detach();
+        }
+    }
+    
+    // 정상 활동 기록
+    update_last_activity();
+}
+
+// ============================================================================
+// MQTT 연결
+// ============================================================================
 bool MQTTClient::connect_to_broker() {
     // Server URI 생성
     std::string server_uri;
+    std::string protocol = config_.get_protocol_string();
+    
     if (config_.use_websockets) {
-        server_uri = "wss://" + config_.broker_host + ":" + 
+        server_uri = protocol + "://" + config_.broker_host + ":" + 
                      std::to_string(config_.broker_port) + config_.websocket_path;
     } else {
-        server_uri = "ssl://" + config_.broker_host + ":" + std::to_string(config_.broker_port);
+        server_uri = protocol + "://" + config_.broker_host + ":" + 
+                     std::to_string(config_.broker_port);
     }
     
-    std::cout << "[MQTT] Creating client: " << server_uri << std::endl;
-    
     // MQTT 클라이언트 생성
+    std::cout << "[MQTT] Creating client: " << server_uri << std::endl;
+    std::cout << "[MQTT] Protocol: " << protocol 
+              << " (WebSocket: " << (config_.use_websockets ? "Yes" : "No")
+              << ", SSL: " << (config_.use_ssl ? "Yes" : "No") << ")" << std::endl;
+    
     int rc = MQTTAsync_create(&client_, server_uri.c_str(), config_.client_id.c_str(),
                               MQTTCLIENT_PERSISTENCE_NONE, nullptr);
     if (rc != MQTTASYNC_SUCCESS) {
@@ -257,24 +359,34 @@ bool MQTTClient::connect_to_broker() {
         return false;
     }
     
-    // SSL 설정
-    std::string cert_file = setup_ssl_cert();
-    
-    MQTTAsync_SSLOptions ssl_opts = MQTTAsync_SSLOptions_initializer;
-    ssl_opts.trustStore = cert_file.c_str();
-    ssl_opts.enableServerCertAuth = 1;
-    
     // 연결 옵션 설정
     MQTTAsync_connectOptions conn_opts = MQTTAsync_connectOptions_initializer;
     conn_opts.keepAliveInterval = config_.keep_alive_seconds;
     conn_opts.cleansession = 1;
-    conn_opts.automaticReconnect = 1;  // 자동 재연결 활성화
+    conn_opts.automaticReconnect = 1; // 자동 재연결 활성화
     conn_opts.minRetryInterval = config_.min_retry_interval;
     conn_opts.maxRetryInterval = config_.max_retry_interval;
-    conn_opts.ssl = &ssl_opts;
     conn_opts.onSuccess = on_connect_success;
     conn_opts.onFailure = on_connect_failure;
     conn_opts.context = this;
+    
+    // SSL 설정
+    MQTTAsync_SSLOptions ssl_opts = MQTTAsync_SSLOptions_initializer;
+    if (config_.use_ssl) {
+        try {
+            std::string cert_file = setup_ssl_cert();
+            ssl_opts.trustStore = cert_file.c_str();
+            ssl_opts.enableServerCertAuth = 1;
+            conn_opts.ssl = &ssl_opts;
+            std::cout << "[MQTT] SSL/TLS enabled" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[MQTT] SSL setup failed: " << e.what() << std::endl;
+            MQTTAsync_destroy(&client_);
+            return false;
+        }
+    } else {
+        std::cout << "[MQTT] SSL/TLS disabled (insecure connection)" << std::endl;
+    }
     
     if (config_.username.has_value()) {
         conn_opts.username = config_.username.value().c_str();
@@ -322,9 +434,21 @@ void MQTTClient::run() {
         return;
     }
     
+    auto last_health_check = std::chrono::steady_clock::now();
+    
     // 메인 루프
     while (!should_stop_.load()) {
         process_requests();
+        
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_health_check).count();
+        
+        if (elapsed_ms >= config_.connection_check_interval_ms) {
+            check_connection_health();
+            last_health_check = now;
+        }
+        
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
@@ -432,6 +556,7 @@ void MQTTClient::on_connection_lost(void* context, char* cause) {
 
 int MQTTClient::on_message_arrived(void* context, char* topicName, int topicLen, MQTTAsync_message* message) {
     auto* client = static_cast<MQTTClient*>(context);
+    client->update_last_activity();
     
     std::string topic(topicName);
     std::string payload(static_cast<char*>(message->payload), message->payloadlen);
@@ -445,6 +570,8 @@ int MQTTClient::on_message_arrived(void* context, char* topicName, int topicLen,
 
 void MQTTClient::on_delivery_complete(void* context, MQTTAsync_token token) {
     auto* client = static_cast<MQTTClient*>(context);
+    client->update_last_activity();
+    
     MQTTEvent event(EventType::DELIVERY_COMPLETE);
     event.token = token;
     client->event_queue_.push(event);
@@ -453,6 +580,7 @@ void MQTTClient::on_delivery_complete(void* context, MQTTAsync_token token) {
 void MQTTClient::on_connect_success(void* context, MQTTAsync_successData* response) {
     auto* client = static_cast<MQTTClient*>(context);
     client->connected_.store(true);
+    client->update_last_activity();
     client->event_queue_.push(MQTTEvent(EventType::CONNECTED, "Connected to broker"));
     std::cout << "[Callback] Connected successfully" << std::endl;
 }

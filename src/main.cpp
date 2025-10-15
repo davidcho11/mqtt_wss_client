@@ -1,3 +1,4 @@
+//./mqtt_client_test --ws --no-ssl edencrew.synology.me 29001
 //./mqtt_client_test edencrew.synology.me 29002
 
 #include "mqtt_client.h"
@@ -54,7 +55,7 @@ public:
     }
     
 private:
-    void on_connected() {
+    bool on_connected() {
         std::cout << "[EventHandler] ✓ Successfully connected to broker!" << std::endl;
         std::cout << "[EventHandler] Subscribing to test topics..." << std::endl;
         
@@ -62,11 +63,13 @@ private:
         client_.request_subscribe("test/topic", 1);
         client_.request_subscribe("system/status", 1);
         client_.request_subscribe("control/stop", 1);  // 종료 명령 토픽
+        return true;
     }
     
-    void on_connection_lost(const std::string& cause) {
+    bool on_connection_lost(const std::string& cause) {
         std::cout << "[EventHandler] ✗ Connection lost: " << cause << std::endl;
         std::cout << "[EventHandler] Auto-reconnection will be attempted..." << std::endl;
+        return true;
     }
     
     bool on_message_arrived(const std::string& topic, const std::string& payload, int qos) {
@@ -91,7 +94,7 @@ private:
         return true;  // 계속 실행
     }
     
-    void on_subscribe_success() {
+    bool on_subscribe_success() {
         std::cout << "[EventHandler] ✓ Subscription successful" << std::endl;
         
         // 구독 성공 후 테스트 메시지 발행
@@ -100,14 +103,17 @@ private:
             std::cout << "[EventHandler] Publishing test message..." << std::endl;
             client_.request_publish("test/topic", "Hello MQTT! Test message #1", 1, false);
         }
+        return true;
     }
     
-    void on_publish_success() {
+    bool on_publish_success() {
         std::cout << "[EventHandler] ✓ Message published successfully" << std::endl;
+        return true;
     }
     
-    void on_error(const std::string& error) {
+    bool on_error(const std::string& error) {
         std::cerr << "[EventHandler] ✗ Error: " << error << std::endl;
+        return true;
     }
     
     MQTTClient& client_;
@@ -117,22 +123,41 @@ private:
 void print_usage() {
     std::cout << R"(
 ========================================
-MQTT WSS Client Test Program
+MQTT Client Test Program (WS/WSS/TCP/SSL)
 ========================================
 
-Features:
-1. Windows system certificates (automatic)
-2. Custom certificate file (optional)
-3. Automatic reconnection
-4. Thread-based event processing
-5. Graceful shutdown
-
 Usage:
-  mqtt_client_test.exe <broker_host> <port> [cert_file]
+  mqtt_client_test [options] <broker_host> <port>
+
+Options:
+  --ws         Use WebSocket (default)
+  --tcp        Use TCP instead of WebSocket
+  --ssl        Use SSL/TLS (default)
+  --no-ssl     Disable SSL/TLS (insecure)
+  --cert PATH  Custom certificate file
+  -h, --help   Show this help
 
 Examples:
-  mqtt_client_test.exe broker.example.com 8883
-  mqtt_client_test.exe localhost 8883 C:\certs\ca.crt
+  # WSS (WebSocket Secure) - Default
+  mqtt_client_test test.mosquitto.org 8883
+
+  # WS (WebSocket without SSL) - Insecure
+  mqtt_client_test --no-ssl test.mosquitto.org 8080
+
+  # MQTTS (MQTT over SSL)
+  mqtt_client_test --tcp --ssl broker.hivemq.com 8883
+
+  # MQTT (Plain TCP) - Insecure
+  mqtt_client_test --tcp --no-ssl test.mosquitto.org 1883
+
+  # With custom certificate
+  mqtt_client_test --cert ca.crt broker.example.com 8883
+
+Protocol Combinations:
+  WebSocket + SSL     = wss://   (Port 8883, 443)
+  WebSocket + No SSL  = ws://    (Port 8080, 8083)
+  TCP + SSL           = ssl://   (Port 8883)
+  TCP + No SSL        = tcp://   (Port 1883)
 
 Test Commands:
   - Subscribe to: test/topic, system/status, control/stop
@@ -146,7 +171,7 @@ Press Ctrl+C to exit
 
 int main(int argc, char* argv[]) {
     // 사용법 출력
-    if (argc < 3) {
+    if (argc < 2) {
         print_usage();
         std::cout << "\nStarting with default test broker (test.mosquitto.org)..." << std::endl;
     }
@@ -158,38 +183,88 @@ int main(int argc, char* argv[]) {
     try {
         // 설정
         MQTTConfig config;
-        config.broker_host = (argc >= 2) ? argv[1] : "test.mosquitto.org";
-        config.broker_port = (argc >= 3) ? std::atoi(argv[2]) : 8883;
-        config.client_id = "cpp_mqtt_test_client";
-        config.websocket_path = "/mqtt";
         config.use_websockets = true;
-        config.min_retry_interval = 1;
-        config.max_retry_interval = 60;
+        config.use_ssl = true;
+        
+        std::string broker_host;
+        int broker_port = 0;
         
         // 인증서 파일 (선택사항)
-        if (argc >= 4) {
-            config.cert_file_path = argv[3];
-            std::cout << "[Main] Using certificate file: " << argv[3] << std::endl;
-        } else {
-            std::cout << "[Main] Using Windows system certificates" << std::endl;
+        int arg_idx = 1;
+        while (arg_idx < argc) {
+            std::string arg = argv[arg_idx];
+            
+            if (arg == "--ws") {
+                config.use_websockets = true;
+                arg_idx++;
+            } else if (arg == "--tcp") {
+                config.use_websockets = false;
+                arg_idx++;
+            } else if (arg == "--ssl") {
+                config.use_ssl = true;
+                arg_idx++;
+            } else if (arg == "--no-ssl") {
+                config.use_ssl = false;
+                arg_idx++;
+            } else if (arg == "--cert" && arg_idx + 1 < argc) {
+                config.cert_file_path = argv[arg_idx + 1];
+                arg_idx += 2;
+            } else if (arg == "-h" || arg == "--help") {
+                print_usage();
+                return 0;
+            } else {
+                if (broker_host.empty()) {
+                    broker_host = arg;
+                } else if (broker_port == 0) {
+                    broker_port = std::atoi(arg.c_str());
+                }
+                arg_idx++;
+            }
         }
         
+        if (broker_host.empty()) {
+            broker_host = "test.mosquitto.org";
+        }
+        
+        config.broker_host = broker_host;
+        
+        if (broker_port == 0) {
+            broker_port = config.get_default_port();
+        }
+        config.broker_port = broker_port;
+        
+        config.client_id = "cpp_mqtt_test_client";
+        config.websocket_path = "/mqtt";
+        config.keep_alive_seconds = 20;
+        config.connection_check_interval_ms = 1000;
+
         // 인증 (필요한 경우)
         // config.username = "username";
         // config.password = "password";
         
         std::cout << "\n[Main] Configuration:" << std::endl;
         std::cout << "  Broker: " << config.broker_host << ":" << config.broker_port << std::endl;
-        std::cout << "  Client ID: " << config.client_id << std::endl;
+        std::cout << "  Protocol: " << config.get_protocol_string() << "://" << std::endl;
         std::cout << "  WebSocket: " << (config.use_websockets ? "Yes" : "No") << std::endl;
+        std::cout << "  SSL/TLS: " << (config.use_ssl ? "Yes" : "No") << std::endl;
+        std::cout << "  Client ID: " << config.client_id << std::endl;
+        
+        if (config.cert_file_path.has_value()) {
+            std::cout << "  Certificate: " << config.cert_file_path.value() << std::endl;
+        } else if (config.use_ssl) {
+            std::cout << "  Certificate: System certificates" << std::endl;
+        }
+        
+        if (!config.use_ssl) {
+            std::cout << "\n  ⚠️  WARNING: SSL/TLS is disabled - connection is NOT secure!" << std::endl;
+        }
+        
         std::cout << std::endl;
         
         // 이벤트 큐 생성
         EventQueue event_queue;
-        
         // MQTT 클라이언트 생성
         MQTTClient mqtt_client(config, event_queue);
-        
         // 이벤트 핸들러 생성
         EventHandler event_handler(mqtt_client);
         
@@ -212,18 +287,14 @@ int main(int argc, char* argv[]) {
             
             if (event.has_value()) {
                 event_count++;
-                
                 // 이벤트 핸들러에서 처리
                 bool should_continue = event_handler.handle_event(event.value());
-                
                 // false 반환 시 종료
                 if (!should_continue) {
-                    std::cout << "[Main] Event handler requested shutdown" << std::endl;
                     g_running.store(false);
                     break;
                 }
             }
-            
             // 주기적인 상태 출력 (30초마다)
             auto now = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_status_time);
@@ -233,19 +304,18 @@ int main(int argc, char* argv[]) {
                 std::cout << "  Connected: " << (mqtt_client.is_connected() ? "Yes" : "No") << std::endl;
                 std::cout << "  Events processed: " << event_count << std::endl;
                 std::cout << "  Queue size: " << event_queue.size() << std::endl;
+                std::cout << "  Protocol: " << config.get_protocol_string() << "://" << std::endl;
                 std::cout << std::endl;
                 
                 last_status_time = now;
-                
                 // 주기적인 테스트 메시지 발행
                 if (mqtt_client.is_connected()) {
                     auto timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-                    std::string msg = "Periodic status update: " + std::to_string(timestamp);
+                    std::string msg = "Status update: " + std::to_string(timestamp);
                     mqtt_client.request_publish("system/status", msg, 1, false);
                 }
             }
         }
-        
         // 정리
         std::cout << "\n[Main] Shutting down..." << std::endl;
         mqtt_client.stop();

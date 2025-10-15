@@ -60,6 +60,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(MSVC)
     add_compile_options(/W4 /utf-8)
     add_definitions(-D_WIN32_WINNT=0x0601)
+elseif(APPLE)
+    add_compile_options(-Wall -Wextra -Wpedantic)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -111,17 +113,24 @@ target_include_directories(mqtt_wss_client PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(mqtt_wss_client
-    PUBLIC
+target_link_libraries(mqtt_wss_client PUBLIC
         ${PAHO_SSL_TARGET}
         OpenSSL::SSL
         OpenSSL::Crypto
         Threads::Threads
 )
 
-# Windows 전용 라이브러리(crypt32)는 윈도우에서만 링크
+# 플랫폼별 전용 라이브러리 링크
 if(WIN32)
-    target_link_libraries(mqtt_wss_client PUBLIC crypt32)
+    target_link_libraries(mqtt_wss_client PUBLIC
+        crypt32
+    )
+elseif(APPLE)
+    target_link_libraries(mqtt_wss_client PUBLIC
+        "-framework Security"
+        "-framework CoreFoundation"
+    )
+else()  # Linux
 endif()
 
 # ----- 실행 파일 ------------------------------------------------------------

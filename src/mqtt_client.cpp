@@ -19,6 +19,7 @@ MQTTClient::~MQTTClient() {
     stop();
 }
 
+// Windows 인증서 추출
 std::string MQTTClient::extract_windows_certificates() {
 #ifdef _WIN32
     std::ostringstream pem_stream;
@@ -27,7 +28,7 @@ std::string MQTTClient::extract_windows_certificates() {
     for (const auto& store_name : store_names) {
         HCERTSTORE hStore = CertOpenSystemStoreA(0, store_name);
         if (!hStore) {
-            std::cerr << "Failed to open certificate store: " << store_name << std::endl;
+            std::cerr << "[SSL] Failed to open certificate store: " << store_name << std::endl;
             continue;
         }
 
@@ -51,22 +52,124 @@ std::string MQTTClient::extract_windows_certificates() {
 #endif
 }
 
+// macOS 인증서 추출
+std::string MQTTClient::extract_macos_certificates() {
+#ifdef __APPLE__
+    std::ostringstream pem_stream;
+    
+    // macOS 10.10+ 에서는 SecTrustCopyAnchorCertificates 사용
+    CFArrayRef anchor_certs = nullptr;
+    OSStatus status = SecTrustCopyAnchorCertificates(&anchor_certs);
+    
+    if (status == errSecSuccess && anchor_certs) {
+        CFIndex count = CFArrayGetCount(anchor_certs);
+        std::cout << "[SSL] Found " << count << " anchor certificates" << std::endl;
+        
+        for (CFIndex i = 0; i < count; i++) {
+            SecCertificateRef cert = (SecCertificateRef)CFArrayGetValueAtIndex(anchor_certs, i);
+            
+            // 인증서를 DER 형식으로 추출
+            CFDataRef cert_data = SecCertificateCopyData(cert);
+            if (cert_data) {
+                const UInt8* der_data = CFDataGetBytePtr(cert_data);
+                CFIndex der_length = CFDataGetLength(cert_data);
+                
+                // DER을 PEM으로 변환
+                pem_stream << "-----BEGIN CERTIFICATE-----\n";
+                
+                std::string base64 = base64_encode(der_data, der_length);
+                for (size_t j = 0; j < base64.length(); j += 64) {
+                    pem_stream << base64.substr(j, 64) << "\n";
+                }
+                
+                pem_stream << "-----END CERTIFICATE-----\n";
+                
+                CFRelease(cert_data);
+            }
+        }
+        
+        CFRelease(anchor_certs);
+    } else {
+        std::cerr << "[SSL] Failed to get anchor certificates: " << status << std::endl;
+    }
+    
+    return pem_stream.str();
+#else
+    return "";
+#endif
+}
+
+// 플랫폼 자동 선택
+std::string MQTTClient::extract_system_certificates() {
+#ifdef _WIN32
+    std::cout << "[SSL] Extracting Windows system certificates..." << std::endl;
+    return extract_windows_certificates();
+#elif __APPLE__
+    std::cout << "[SSL] Extracting macOS system certificates..." << std::endl;
+    return extract_macos_certificates();
+#elif __linux__
+    std::cout << "[SSL] Linux detected - using system cert paths" << std::endl;
+    return "";  // Linux는 /etc/ssl/certs 직접 사용
+#else
+    std::cerr << "[SSL] Unsupported platform for certificate extraction" << std::endl;
+    return "";
+#endif
+}
+
 std::string MQTTClient::setup_ssl_cert() {
-    // 1. 사용자 지정 인증서 파일이 있으면 우선 사용
+    // 1. 사용자 지정 인증서 파일
     if (config_.cert_file_path.has_value() && fs::exists(config_.cert_file_path.value())) {
         std::cout << "[SSL] Using provided certificate file: " << config_.cert_file_path.value() << std::endl;
         return config_.cert_file_path.value();
     }
     
-    // 2. Windows 시스템 인증서 추출
-    std::cout << "[SSL] Extracting Windows system certificates..." << std::endl;
-    std::string pem_certs = extract_windows_certificates();
+    // 2. macOS - OpenSSL 설치 경로 확인
+#ifdef __APPLE__
+    std::vector<std::string> macos_cert_paths = {
+        "/etc/ssl/cert.pem",                           // macOS 시스템 기본
+        "/usr/local/etc/openssl@3/cert.pem",          // Homebrew OpenSSL 3
+        "/usr/local/etc/openssl@1.1/cert.pem",        // Homebrew OpenSSL 1.1
+        "/opt/homebrew/etc/openssl@3/cert.pem",       // Apple Silicon Homebrew
+        "/opt/homebrew/etc/openssl@1.1/cert.pem",     // Apple Silicon Homebrew
+        "/usr/local/etc/openssl/cert.pem"             // Homebrew 구버전
+    };
     
-    if (pem_certs.empty()) {
-        throw std::runtime_error("Failed to extract Windows certificates and no cert file provided");
+    for (const auto& path : macos_cert_paths) {
+        if (fs::exists(path)) {
+            std::cout << "[SSL] Using macOS certificate bundle: " << path << std::endl;
+            return path;
+        }
     }
     
-    // 임시 파일에 저장
+    std::cout << "[SSL] No pre-installed certificate bundle found, extracting from system..." << std::endl;
+#endif
+    
+    // 3. Linux - 시스템 경로 사용
+#ifdef __linux__
+    std::vector<std::string> linux_cert_paths = {
+        "/etc/ssl/certs/ca-certificates.crt",  // Debian/Ubuntu
+        "/etc/pki/tls/certs/ca-bundle.crt",    // RedHat/CentOS
+        "/etc/ssl/ca-bundle.pem",               // OpenSUSE
+        "/etc/ssl/cert.pem"                     // Generic
+    };
+    
+    for (const auto& path : linux_cert_paths) {
+        if (fs::exists(path)) {
+            std::cout << "[SSL] Using Linux system certificates: " << path << std::endl;
+            return path;
+        }
+    }
+#endif
+    
+    // 4. 시스템 인증서 추출 (Windows 또는 macOS에서 경로를 못 찾은 경우)
+    std::cout << "[SSL] Extracting system certificates..." << std::endl;
+    std::string pem_certs = extract_system_certificates();
+    
+    if (pem_certs.empty()) {
+        throw std::runtime_error("Failed to extract system certificates and no cert file provided");
+    }
+    
+    // 임시 파일 저장
     fs::path temp_dir = fs::temp_directory_path();
     temp_cert_file_ = (temp_dir / ("mqtt_certs_" + config_.client_id + ".pem")).string();
     
@@ -79,6 +182,50 @@ std::string MQTTClient::setup_ssl_cert() {
     
     std::cout << "[SSL] Temporary certificate file created: " << temp_cert_file_ << std::endl;
     return temp_cert_file_;
+}
+
+// Base64 인코딩 (macOS/크로스 플랫폼용)
+std::string MQTTClient::base64_encode(const unsigned char* data, size_t length) {
+    static const char base64_chars[] = 
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789+/";
+    
+    std::string ret;
+    int i = 0;
+    unsigned char char_array_3[3];
+    unsigned char char_array_4[4];
+    
+    while (length--) {
+        char_array_3[i++] = *(data++);
+        if (i == 3) {
+            char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+            char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+            char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+            char_array_4[3] = char_array_3[2] & 0x3f;
+            
+            for(i = 0; i < 4; i++)
+                ret += base64_chars[char_array_4[i]];
+            i = 0;
+        }
+    }
+    
+    if (i) {
+        for(int j = i; j < 3; j++)
+            char_array_3[j] = '\0';
+        
+        char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+        char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+        char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+        
+        for (int j = 0; j < i + 1; j++)
+            ret += base64_chars[char_array_4[j]];
+        
+        while(i++ < 3)
+            ret += '=';
+    }
+    
+    return ret;
 }
 
 bool MQTTClient::connect_to_broker() {

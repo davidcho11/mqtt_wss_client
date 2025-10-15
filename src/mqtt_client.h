@@ -20,7 +20,6 @@
 #endif
 
 namespace fs = std::filesystem;
-
 namespace mqtt_client {
 
 struct MQTTConfig {
@@ -73,10 +72,15 @@ private:
     static void on_send_success(void* context, MQTTAsync_successData* response);
     static void on_send_failure(void* context, MQTTAsync_failureData* response);
 
-    // 인증서 관련
+    // 플랫폼별 인증서 추출
     std::string extract_windows_certificates();
+    std::string extract_macos_certificates();
+    std::string extract_system_certificates();  // 플랫폼 자동 선택
     std::string setup_ssl_cert();
-    
+        
+    // Base64 인코딩 헬퍼
+    std::string base64_encode(const unsigned char* data, size_t length);
+ 
     // MQTT 연결
     bool connect_to_broker();
     void disconnect_from_broker();

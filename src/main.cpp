@@ -1,6 +1,3 @@
-//./mqtt_client_test --ws --no-ssl edencrew.synology.me 29001
-//./mqtt_client_test edencrew.synology.me 29002
-
 #include "mqtt_client.h"
 #include <iostream>
 #include <csignal>

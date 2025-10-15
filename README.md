@@ -11,6 +11,14 @@
 - **자동 재연결**: 연결 끊김 시 자동 복구
 - **스레드 안전**: 멀티스레드 환경에서 안전한 사용
 
+## 플랫폼별 차이점 요약
+| 기능 | Windows | macOS | Linux |
+|---------|------|---------|------|
+| 인증서 저장소 | Certificate Store | Keychain | /etc/ssl/certs |
+| API | WinCrypt | Security Framework | 파일 시스템 |
+| 추출 방식 | API → PEM | API → PEM | 직접 경로 사용 |
+| 링크 라이브러리 | crypt32.lib | -framework Security | 없음 |
+
 ## 지원 프로토콜
 
 | 프로토콜 | 설명 | 명령옵션 | 포트 | 보안 | 사용 사례 |

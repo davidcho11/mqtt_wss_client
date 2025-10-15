@@ -4,21 +4,29 @@ A cross-platform MQTT client library supporting WebSocket and SSL/TLS protocols.
 
 ## Key Features
 
-- **Multi-Protocol Support**: WebSocket (WS/WSS), TCP (MQTT/MQTTS)
+- **Multi-protocol Support**: WebSocket (WS/WSS), TCP (MQTT/MQTTS)
 - **SSL/TLS Security**: Automatic certificate management and platform-specific certificate extraction
-- **Cross-Platform**: Windows, macOS, Linux support
-- **Asynchronous Processing**: Event-driven architecture
-- **Auto-Reconnection**: Automatic recovery from connection failures
-- **Thread-Safe**: Safe usage in multi-threaded environments
+- **Cross-platform**: Windows, macOS, Linux support
+- **Asynchronous Processing**: Event-based architecture
+- **Auto-reconnection**: Automatic recovery on connection loss
+- **Thread-safe**: Safe to use in multi-threaded environments
+
+## Platform Differences Summary
+| Feature | Windows | macOS | Linux |
+|---------|------|---------|------|
+| Certificate Store | Certificate Store | Keychain | /etc/ssl/certs |
+| API | WinCrypt | Security Framework | File System |
+| Extraction Method | API → PEM | API → PEM | Direct Path Usage |
+| Link Libraries | crypt32.lib | -framework Security | None |
 
 ## Supported Protocols
 
 | Protocol | Description | Command Options | Port | Security | Use Case |
-|----------|-------------|-----------------|------|----------|----------|
-| WSS | WebSocket Secure | --ws --ssl | 8883, 443 | ✅ | Production (Recommended) |
+|---------|------|---------|------|------|----------|
+| WSS | WebSocket Secure |--ws --ssl | 8883, 443 | ✅ | Production (Recommended) |
 | WS | WebSocket | --ws --no-ssl | 8080, 8083 | ❌ | Local Development |
 | MQTTS | MQTT over SSL | --tcp --ssl | 8883 | ✅ | IoT Devices |
-| MQTT | Plain TCP | --tcp --no-ssl | 1883 | ❌ | Internal Networks |
+| MQTT | Plain TCP | --tcp --no-ssl | 1883 | ❌ | Internal Network |
 
 ## Build Requirements
 
@@ -28,7 +36,7 @@ A cross-platform MQTT client library supporting WebSocket and SSL/TLS protocols.
 - **Eclipse Paho MQTT C** library
 - **OpenSSL** 1.1 or higher
 
-### Platform-Specific Installation
+### Platform-specific Installation
 
 #### macOS (Homebrew)
 ```bash
@@ -66,7 +74,7 @@ cd mqtt_wss_client
 # Create build directory
 mkdir build && cd build
 
-# Configure with CMake
+# Configure CMake
 cmake ..
 
 # Build
@@ -127,7 +135,7 @@ int main() {
 
 ### Command Line Test Program
 
-After building, use the `mqtt_client_test` executable to test various protocols.
+After building, you can use the `mqtt_client_test` executable to test various protocols.
 
 ```bash
 # WSS (WebSocket Secure) - Default
@@ -142,7 +150,7 @@ After building, use the `mqtt_client_test` executable to test various protocols.
 # MQTT (Plain TCP) - Insecure
 ./mqtt_client_test --tcp --no-ssl test.mosquitto.org 1883
 
-# With custom certificate
+# Use custom certificate
 ./mqtt_client_test --cert ca.crt broker.example.com 8883
 ```
 
@@ -152,7 +160,7 @@ After building, use the `mqtt_client_test` executable to test various protocols.
 
 ```cpp
 struct MQTTConfig {
-    std::string broker_host;                    // Broker hostname
+    std::string broker_host;                    // Broker host
     int broker_port = 8883;                     // Broker port
     std::string client_id;                      // Client ID
     std::optional<std::string> username;        // Username (optional)
@@ -183,7 +191,7 @@ public:
     // Check connection status
     bool is_connected() const;
     
-    // MQTT operations (thread-safe)
+    // MQTT operation requests (thread-safe)
     void request_subscribe(const std::string& topic, int qos = 1);
     void request_publish(const std::string& topic, const std::string& payload, 
                         int qos = 1, bool retained = false);
@@ -219,8 +227,8 @@ enum class EventType {
     CONNECTION_LOST,     // Connection lost
     MESSAGE_ARRIVED,     // Message received
     DELIVERY_COMPLETE,   // Message delivery complete
-    SUBSCRIBE_SUCCESS,   // Subscription successful
-    SUBSCRIBE_FAILURE,   // Subscription failed
+    SUBSCRIBE_SUCCESS,   // Subscribe successful
+    SUBSCRIBE_FAILURE,   // Subscribe failed
     PUBLISH_SUCCESS,     // Publish successful
     PUBLISH_FAILURE,     // Publish failed
     ERROR                // Error occurred
@@ -229,11 +237,11 @@ enum class EventType {
 
 ## SSL/TLS Certificate Management
 
-This library automatically extracts system certificates on each platform:
+This library automatically extracts system certificates on a per-platform basis:
 
 - **Windows**: Extracts ROOT, CA certificates from Windows Certificate Store
 - **macOS**: Extracts anchor certificates from Keychain
-- **Linux**: Uses system certificate paths (`/etc/ssl/certs/`)
+- **Linux**: Uses system certificate path (`/etc/ssl/certs/`)
 
 To use custom certificates, set the PEM format certificate file path in `MQTTConfig::cert_file_path`.
 
@@ -243,9 +251,9 @@ To use custom certificates, set the PEM format certificate file path in `MQTTCon
 
 2. **Memory Management**: The `MQTTClient` object must remain valid until the `run()` method completes.
 
-3. **SSL Disabled**: Setting `use_ssl = false` creates an insecure connection. Do not use in production environments.
+3. **SSL Disable**: Setting `use_ssl = false` creates an insecure connection. Do not use in production environments.
 
-4. **Auto-Reconnection**: When a connection is lost, automatic reconnection is attempted. Subscriptions are not automatically restored after reconnection, so you may need to re-subscribe if necessary.
+4. **Auto-reconnection**: Automatically attempts to reconnect when the connection is lost. Subscriptions are not automatically restored on reconnection, so you may need to resubscribe if necessary.
 
 ## License
 
@@ -253,7 +261,7 @@ This project is distributed under the MIT License.
 
 ## Contributing
 
-Bug reports, feature requests, and pull requests are welcome. Please create an issue first before contributing.
+Bug reports, feature requests, and pull requests are welcome. Please create an issue before contributing.
 
 ## Troubleshooting
 
